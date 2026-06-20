@@ -985,6 +985,7 @@ function App() {
                         activeApp === "claude" ? handleOpenTerminal : undefined
                       }
                       onCreate={() => setIsAddOpen(true)}
+                      onRefresh={() => void refetch()}
                       onSetAsDefault={
                         activeApp === "openclaw"
                           ? setAsDefaultModel

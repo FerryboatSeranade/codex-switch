@@ -32,6 +32,7 @@ import {
 import { useStreamCheck } from "@/hooks/useStreamCheck";
 import { ProviderCard } from "@/components/providers/ProviderCard";
 import { ProviderEmptyState } from "@/components/providers/ProviderEmptyState";
+import { CodexIxQuickSetup } from "@/components/codex/CodexIxQuickSetup";
 import {
   useAutoFailoverEnabled,
   useFailoverQueue,
@@ -62,6 +63,7 @@ interface ProviderListProps {
   onOpenWebsite: (url: string) => void;
   onOpenTerminal?: (provider: Provider) => void;
   onCreate?: () => void;
+  onRefresh?: () => void;
   isLoading?: boolean;
   isProxyRunning?: boolean; // 代理服务运行状态
   isProxyTakeover?: boolean; // 代理接管模式（Live配置已被接管）
@@ -84,6 +86,7 @@ export function ProviderList({
   onOpenWebsite,
   onOpenTerminal,
   onCreate,
+  onRefresh,
   isLoading = false,
   isProxyRunning = false,
   isProxyTakeover = false,
@@ -345,6 +348,19 @@ export function ProviderList({
     return messages;
   }, [appId, claudeDesktopStatus, t]);
 
+  const handleCodexQuickConfigured = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ["providers", appId] });
+    onRefresh?.();
+  }, [appId, onRefresh, queryClient]);
+
+  const codexQuickSetup =
+    appId === "codex" ? (
+      <CodexIxQuickSetup
+        providers={providers}
+        onConfigured={handleCodexQuickConfigured}
+      />
+    ) : null;
+
   if (isLoading) {
     return (
       <div className="space-y-3">
@@ -360,11 +376,14 @@ export function ProviderList({
 
   if (sortedProviders.length === 0) {
     return (
-      <ProviderEmptyState
-        appId={appId}
-        onCreate={onCreate}
-        onImport={() => importMutation.mutate()}
-      />
+      <div className="space-y-4">
+        <ProviderEmptyState
+          appId={appId}
+          onCreate={onCreate}
+          onImport={() => importMutation.mutate()}
+        />
+        {codexQuickSetup}
+      </div>
     );
   }
 
@@ -532,6 +551,7 @@ export function ProviderList({
       ) : (
         renderProviderList()
       )}
+      {codexQuickSetup}
     </div>
   );
 }

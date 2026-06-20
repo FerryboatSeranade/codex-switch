@@ -14,6 +14,7 @@ import {
   ChevronDown,
   ChevronRight,
   Download,
+  KeyRound,
   Loader2,
   Plus,
   Trash2,
@@ -25,6 +26,7 @@ import {
   showFetchModelsError,
   type FetchedModel,
 } from "@/lib/api/model-fetch";
+import { codexGogoaisApi } from "@/lib/api/codexGogoais";
 import { CustomUserAgentField } from "./CustomUserAgentField";
 import { cn } from "@/lib/utils";
 import type {
@@ -37,6 +39,9 @@ import type {
 interface EndpointCandidate {
   url: string;
 }
+
+const GOGO_CODE_BASE_URL = "https://code.gogoais.com";
+const GOGO_LOGIN_BASE_URL = "https://totp.gogoais.com/api";
 
 interface CodexFormFieldsProps {
   providerId?: string;
@@ -141,6 +146,9 @@ export function CodexFormFields({
 
   const [fetchedModels, setFetchedModels] = useState<FetchedModel[]>([]);
   const [isFetchingModels, setIsFetchingModels] = useState(false);
+  const [gogoAccount, setGogoAccount] = useState("");
+  const [gogoPassword, setGogoPassword] = useState("");
+  const [isGogoLoggingIn, setIsGogoLoggingIn] = useState(false);
   const needsLocalRouting = apiFormat === "openai_chat";
   const canEditCatalog = Boolean(onCatalogModelsChange);
   const canEditReasoning = Boolean(onCodexChatReasoningChange);
@@ -258,6 +266,55 @@ export function CodexFormFields({
       .finally(() => setIsFetchingModels(false));
   }, [codexBaseUrl, codexApiKey, isFullUrl, customUserAgent, t]);
 
+  const handleGogoLogin = useCallback(async () => {
+    const account = gogoAccount.trim();
+    if (!account || !gogoPassword) {
+      toast.error(
+        t("codexConfig.gogoLoginRequired", {
+          defaultValue: "请输入 GogoAI 账号和密码",
+        }),
+      );
+      return;
+    }
+
+    setIsGogoLoggingIn(true);
+    try {
+      const result = await codexGogoaisApi.login({
+        account,
+        password: gogoPassword,
+        loginBaseUrl: GOGO_LOGIN_BASE_URL,
+        codeBaseUrl: GOGO_CODE_BASE_URL,
+      });
+      onApiKeyChange(result.apiKey);
+      onBaseUrlChange(result.baseUrl);
+      setGogoPassword("");
+      toast.success(
+        t("codexConfig.gogoLoginSuccess", {
+          defaultValue: "已获取 API Key，并写入 Codex 配置",
+        }),
+      );
+    } catch (err) {
+      console.warn("[GogoAI] Login failed:", err);
+      toast.error(
+        typeof err === "string"
+          ? err
+          : err instanceof Error
+          ? err.message
+          : t("codexConfig.gogoLoginFailed", {
+              defaultValue: "GogoAI 登录失败，请检查账号密码",
+            }),
+      );
+    } finally {
+      setIsGogoLoggingIn(false);
+    }
+  }, [
+    gogoAccount,
+    gogoPassword,
+    onApiKeyChange,
+    onBaseUrlChange,
+    t,
+  ]);
+
   const handleAddCatalogRow = useCallback(() => {
     if (!onCatalogModelsChange) return;
     setCatalogRows((current) => [...current, createCatalogRow()]);
@@ -308,6 +365,70 @@ export function CodexFormFields({
 
   return (
     <>
+      {category !== "official" && (
+        <div className="space-y-3 rounded-lg border border-border-default bg-muted/20 p-4">
+          <div className="flex items-start gap-3">
+            <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-background text-muted-foreground">
+              <KeyRound className="h-4 w-4" />
+            </div>
+            <div className="min-w-0 flex-1 space-y-1">
+              <FormLabel>
+                {t("codexConfig.gogoLoginTitle", {
+                  defaultValue: "GogoAI 账号获取 Key",
+                })}
+              </FormLabel>
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                {t("codexConfig.gogoLoginHint", {
+                  defaultValue:
+                    "输入账号密码后获取 API Key，并自动填入 auth.json 与 config.toml；密码只用于本次请求，不会保存。",
+                })}
+              </p>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-[1fr_1fr_auto]">
+            <Input
+              value={gogoAccount}
+              onChange={(event) => setGogoAccount(event.target.value)}
+              placeholder={t("codexConfig.gogoAccountPlaceholder", {
+                defaultValue: "账号 / 邮箱",
+              })}
+              autoComplete="username"
+            />
+            <Input
+              type="password"
+              value={gogoPassword}
+              onChange={(event) => setGogoPassword(event.target.value)}
+              placeholder={t("codexConfig.gogoPasswordPlaceholder", {
+                defaultValue: "密码",
+              })}
+              autoComplete="current-password"
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void handleGogoLogin();
+                }
+              }}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => void handleGogoLogin()}
+              disabled={isGogoLoggingIn}
+              className="gap-1.5"
+            >
+              {isGogoLoggingIn ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <KeyRound className="h-4 w-4" />
+              )}
+              {t("codexConfig.gogoLoginButton", {
+                defaultValue: "获取并填入",
+              })}
+            </Button>
+          </div>
+        </div>
+      )}
+
       {/* Codex API Key 输入框 */}
       <ApiKeySection
         id="codexApiKey"

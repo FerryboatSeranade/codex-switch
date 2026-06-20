@@ -1,6 +1,6 @@
 export type { AppId } from "./types";
 export { providersApi, universalProvidersApi } from "./providers";
-export { codexAccountsApi } from "./codexAccounts";
+export { codexGogoaisApi } from "./codexGogoais";
 export { settingsApi } from "./settings";
 export { backupsApi } from "./settings";
 export { mcpApi } from "./mcp";
@@ -24,11 +24,9 @@ export type {
   GitHubAccount,
 } from "./copilot";
 export type {
-  CodexAccountState,
-  CodexProfileSummary,
-  CurrentCodexState,
-  DeviceAuthLoginResult,
-} from "./codexAccounts";
+  CodexGogoaisLoginInput,
+  CodexGogoaisLoginResult,
+} from "./codexGogoais";
 export type {
   ManagedAuthProvider,
   ManagedAuthAccount,

@@ -321,6 +321,8 @@ pub struct CodexProviderTemplateMigration {
 pub struct CodexOfficialHistoryUnifyMigration {
     pub completed_at: String,
     pub target_provider_id: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_provider_ids: Vec<String>,
     #[serde(default)]
     pub migrated_jsonl_files: usize,
     #[serde(default)]
@@ -797,6 +799,17 @@ pub fn is_codex_official_history_unify_migrated_for_dir(codex_dir: &str) -> bool
         .as_ref()
         .and_then(|migrations| migrations.codex_official_history_unify_v1.as_ref())
         .is_some_and(|migration| migration.codex_config_dir.as_deref() == Some(codex_dir))
+}
+
+pub fn codex_official_history_unify_migration_for_dir(
+    codex_dir: &str,
+) -> Option<CodexOfficialHistoryUnifyMigration> {
+    get_settings()
+        .local_migrations
+        .as_ref()
+        .and_then(|migrations| migrations.codex_official_history_unify_v1.as_ref())
+        .filter(|migration| migration.codex_config_dir.as_deref() == Some(codex_dir))
+        .cloned()
 }
 
 /// 条件写入迁移完成标记：仅当此刻开关仍开启且迁移意愿仍在时才写。

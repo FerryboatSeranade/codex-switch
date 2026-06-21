@@ -182,6 +182,244 @@ pub async fn restart_app(app: AppHandle) -> Result<bool, String> {
     Ok(true)
 }
 
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexAppRestartResult {
+    pub was_running: bool,
+    pub launched: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_path: Option<String>,
+}
+
+/// 重启外部 Codex.app，而不是重启 CCC Switch 自身。
+#[tauri::command]
+pub async fn restart_codex_app() -> Result<CodexAppRestartResult, String> {
+    restart_codex_app_impl().await
+}
+
+#[cfg(target_os = "macos")]
+async fn restart_codex_app_impl() -> Result<CodexAppRestartResult, String> {
+    tauri::async_runtime::spawn_blocking(restart_codex_app_macos)
+        .await
+        .map_err(|e| format!("重启 Codex App 任务失败: {e}"))?
+}
+
+#[cfg(target_os = "macos")]
+fn restart_codex_app_macos() -> Result<CodexAppRestartResult, String> {
+    let app_path = resolve_codex_app_path();
+    let had_processes = codex_app_has_processes(app_path.as_deref())?;
+    let was_running = codex_app_is_running().unwrap_or(had_processes);
+
+    if was_running || had_processes {
+        if let Err(err) = quit_codex_app() {
+            log::warn!("Codex App graceful quit failed, will terminate processes if needed: {err}");
+        }
+
+        if !wait_for_codex_process_state(
+            app_path.as_deref(),
+            false,
+            std::time::Duration::from_secs(5),
+        )? {
+            signal_codex_app_processes(app_path.as_deref(), "-TERM")?;
+            if !wait_for_codex_process_state(
+                app_path.as_deref(),
+                false,
+                std::time::Duration::from_secs(10),
+            )? {
+                signal_codex_app_processes(app_path.as_deref(), "-KILL")?;
+                if !wait_for_codex_process_state(
+                    app_path.as_deref(),
+                    false,
+                    std::time::Duration::from_secs(5),
+                )? {
+                    return Err("等待 Codex App 退出超时".to_string());
+                }
+            }
+        }
+    }
+
+    launch_codex_app(app_path.as_deref())?;
+    if !wait_for_codex_process_state(
+        app_path.as_deref(),
+        true,
+        std::time::Duration::from_secs(15),
+    )? && !codex_app_is_running()?
+    {
+        return Err("等待 Codex App 启动超时".to_string());
+    }
+
+    Ok(CodexAppRestartResult {
+        was_running,
+        launched: true,
+        app_path: app_path.map(|path| path.to_string_lossy().to_string()),
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn resolve_codex_app_path() -> Option<std::path::PathBuf> {
+    let mut candidates = vec![std::path::PathBuf::from("/Applications/Codex.app")];
+    if let Some(home) = dirs::home_dir() {
+        candidates.push(home.join("Applications").join("Codex.app"));
+    }
+
+    candidates.into_iter().find(|path| path.exists())
+}
+
+#[cfg(target_os = "macos")]
+fn codex_app_is_running() -> Result<bool, String> {
+    let output = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(r#"application id "com.openai.codex" is running"#)
+        .output()
+        .map_err(|e| format!("检查 Codex App 运行状态失败: {e}"))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "检查 Codex App 运行状态失败: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).trim() == "true")
+}
+
+#[cfg(target_os = "macos")]
+fn quit_codex_app() -> Result<(), String> {
+    let output = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(r#"tell application id "com.openai.codex" to quit"#)
+        .output()
+        .map_err(|e| format!("退出 Codex App 失败: {e}"))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "退出 Codex App 失败: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn codex_app_has_processes(app_path: Option<&std::path::Path>) -> Result<bool, String> {
+    match app_path {
+        Some(path) => Ok(!codex_app_pids(path)?.is_empty()),
+        None => codex_app_is_running(),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn wait_for_codex_process_state(
+    app_path: Option<&std::path::Path>,
+    expected: bool,
+    timeout: std::time::Duration,
+) -> Result<bool, String> {
+    let start = std::time::Instant::now();
+    while start.elapsed() < timeout {
+        if codex_app_has_processes(app_path)? == expected {
+            return Ok(true);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+
+    Ok(false)
+}
+
+#[cfg(target_os = "macos")]
+fn codex_app_pids(app_path: &std::path::Path) -> Result<Vec<u32>, String> {
+    let marker = app_path.to_string_lossy();
+    let output = std::process::Command::new("ps")
+        .args(["ax", "-o", "pid=,args="])
+        .output()
+        .map_err(|e| format!("读取 Codex App 进程失败: {e}"))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "读取 Codex App 进程失败: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut pids = Vec::new();
+    for line in stdout.lines() {
+        if !line.contains(marker.as_ref()) {
+            continue;
+        }
+
+        let trimmed = line.trim_start();
+        let Some((pid_text, _args)) = trimmed.split_once(char::is_whitespace) else {
+            continue;
+        };
+        if let Ok(pid) = pid_text.parse::<u32>() {
+            pids.push(pid);
+        }
+    }
+
+    Ok(pids)
+}
+
+#[cfg(target_os = "macos")]
+fn signal_codex_app_processes(
+    app_path: Option<&std::path::Path>,
+    signal: &str,
+) -> Result<(), String> {
+    let Some(path) = app_path else {
+        return Ok(());
+    };
+    let pids = codex_app_pids(path)?;
+    if pids.is_empty() {
+        return Ok(());
+    }
+
+    let mut command = std::process::Command::new("kill");
+    command.arg(signal);
+    for pid in pids {
+        command.arg(pid.to_string());
+    }
+    let output = command
+        .output()
+        .map_err(|e| format!("终止 Codex App 进程失败: {e}"))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "终止 Codex App 进程失败: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn launch_codex_app(app_path: Option<&std::path::Path>) -> Result<(), String> {
+    let mut command = std::process::Command::new("open");
+    if let Some(path) = app_path {
+        command.arg(path);
+    } else {
+        command.arg("-b").arg("com.openai.codex");
+    }
+
+    let output = command
+        .output()
+        .map_err(|e| format!("启动 Codex App 失败: {e}"))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "启动 Codex App 失败: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+async fn restart_codex_app_impl() -> Result<CodexAppRestartResult, String> {
+    Err("当前平台暂不支持自动重启 Codex App".to_string())
+}
+
 /// 下载并安装应用更新，然后由后端直接重启应用。
 ///
 /// macOS 更新会原地替换 `.app` bundle。如果先返回前端、再让旧 WebView 调
@@ -481,6 +719,7 @@ mod tests {
                 codex_official_history_unify_v1: Some(CodexOfficialHistoryUnifyMigration {
                     completed_at: "2026-06-12T00:00:00Z".to_string(),
                     target_provider_id: "custom".to_string(),
+                    source_provider_ids: Vec::new(),
                     migrated_jsonl_files: 5,
                     migrated_state_rows: 7,
                     codex_config_dir: None,
@@ -534,6 +773,7 @@ mod tests {
                 codex_official_history_unify_v1: Some(CodexOfficialHistoryUnifyMigration {
                     completed_at: "2026-06-12T00:00:00Z".to_string(),
                     target_provider_id: "custom".to_string(),
+                    source_provider_ids: Vec::new(),
                     migrated_jsonl_files: 1,
                     migrated_state_rows: 2,
                     codex_config_dir: None,
@@ -567,6 +807,7 @@ mod tests {
                 codex_official_history_unify_v1: Some(CodexOfficialHistoryUnifyMigration {
                     completed_at: "2026-06-12T00:00:00Z".to_string(),
                     target_provider_id: "custom".to_string(),
+                    source_provider_ids: Vec::new(),
                     migrated_jsonl_files: 1,
                     migrated_state_rows: 2,
                     codex_config_dir: None,

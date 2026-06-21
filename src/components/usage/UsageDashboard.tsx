@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { UsageHero } from "./UsageHero";
+import { DataSourceBar } from "./DataSourceBar";
 import { UsageTrendChart } from "./UsageTrendChart";
 import { RequestLogTable } from "./RequestLogTable";
 import { ProviderStatsTable } from "./ProviderStatsTable";
@@ -283,6 +284,8 @@ export function UsageDashboard() {
           </div>
         </div>
       </div>
+
+      <DataSourceBar refreshIntervalMs={refreshIntervalMs} />
 
       <UsageHero
         range={range}

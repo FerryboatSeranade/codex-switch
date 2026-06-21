@@ -13,13 +13,22 @@ import {
   type CSSProperties,
 } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertTriangle, Search, X } from "lucide-react";
+import {
+  AlertTriangle,
+  History,
+  Loader2,
+  RotateCcw,
+  Search,
+  X,
+} from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import type { Provider } from "@/types";
+import type { Provider, Settings } from "@/types";
 import type { AppId } from "@/lib/api";
 import { providersApi } from "@/lib/api/providers";
+import { settingsApi } from "@/lib/api/settings";
+import { useSettingsQuery } from "@/lib/query";
 import { useDragSort } from "@/hooks/useDragSort";
 import {
   useOpenClawLiveProviderIds,
@@ -46,6 +55,14 @@ import {
 import { useCallback } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { cn } from "@/lib/utils";
 import { isTextEditableTarget } from "@/utils/domUtils";
 
 interface ProviderListProps {
@@ -193,7 +210,14 @@ export function ProviderList({
 
   const [searchTerm, setSearchTerm] = useState("");
   const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [isRestartingApp, setIsRestartingApp] = useState(false);
+  const [isSavingUnifyHistory, setIsSavingUnifyHistory] = useState(false);
+  const [showUnifyEnableConfirm, setShowUnifyEnableConfirm] = useState(false);
+  const [showUnifyDisableConfirm, setShowUnifyDisableConfirm] =
+    useState(false);
+  const [hasUnifyBackup, setHasUnifyBackup] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const { data: settings } = useSettingsQuery();
   const { data: claudeDesktopStatus } = useQuery({
     queryKey: ["claudeDesktopStatus"],
     queryFn: () => providersApi.getClaudeDesktopStatus(),
@@ -353,6 +377,132 @@ export function ProviderList({
     onRefresh?.();
   }, [appId, onRefresh, queryClient]);
 
+  const handleRestartApp = useCallback(async () => {
+    if (isRestartingApp) return;
+
+    setIsRestartingApp(true);
+    toast.info(
+      t("provider.restartAppStarting", {
+        defaultValue: "Restarting Codex App...",
+      }),
+    );
+    try {
+      await settingsApi.restartCodexApp();
+      toast.success(
+        t("provider.restartAppSuccess", {
+          defaultValue: "Codex App restarted",
+        }),
+      );
+    } catch (error) {
+      console.error("[ProviderList] Failed to restart Codex App", error);
+      toast.error(
+        t("provider.restartAppFailed", {
+          defaultValue: "Failed to restart Codex App",
+        }),
+      );
+    } finally {
+      setIsRestartingApp(false);
+    }
+  }, [isRestartingApp, t]);
+
+  const unifyCodexSessionHistory = settings?.unifyCodexSessionHistory ?? true;
+  const showRestoreUnifyOption =
+    hasUnifyBackup || (settings?.unifyCodexMigrateExisting ?? false);
+
+  const saveUnifyCodexHistory = useCallback(
+    async (updates: Partial<Settings>): Promise<boolean> => {
+      if (!settings || isSavingUnifyHistory) return false;
+
+      setIsSavingUnifyHistory(true);
+      try {
+        await settingsApi.save({ ...settings, ...updates });
+        await queryClient.invalidateQueries({ queryKey: ["settings"] });
+        toast.success(
+          updates.unifyCodexSessionHistory
+            ? t("provider.unifySessionEnabled", {
+                defaultValue: "Unified session history enabled",
+              })
+            : t("provider.unifySessionDisabled", {
+                defaultValue: "Unified session history disabled",
+              }),
+        );
+        return true;
+      } catch (error) {
+        console.error("[ProviderList] Failed to update unified history", error);
+        toast.error(
+          t("provider.unifySessionSaveFailed", {
+            defaultValue: "Failed to update unified session history",
+          }),
+        );
+        return false;
+      } finally {
+        setIsSavingUnifyHistory(false);
+      }
+    },
+    [isSavingUnifyHistory, queryClient, settings, t],
+  );
+
+  const handleUnifySessionClick = useCallback(() => {
+    if (isSavingUnifyHistory) return;
+
+    if (unifyCodexSessionHistory) {
+      void settingsApi
+        .hasCodexUnifyHistoryBackup()
+        .catch(() => false)
+        .then((hasBackup) => {
+          setHasUnifyBackup(hasBackup);
+          setShowUnifyDisableConfirm(true);
+        });
+      return;
+    }
+
+    setShowUnifyEnableConfirm(true);
+  }, [isSavingUnifyHistory, unifyCodexSessionHistory]);
+
+  const handleUnifyEnableConfirm = useCallback(
+    (migrateExisting: boolean) => {
+      setShowUnifyEnableConfirm(false);
+      void saveUnifyCodexHistory({
+        unifyCodexSessionHistory: true,
+        unifyCodexMigrateExisting: migrateExisting,
+      });
+    },
+    [saveUnifyCodexHistory],
+  );
+
+  const handleUnifyDisableConfirm = useCallback(
+    async (restoreBackup: boolean) => {
+      setShowUnifyDisableConfirm(false);
+      const saved = await saveUnifyCodexHistory({
+        unifyCodexSessionHistory: false,
+        unifyCodexMigrateExisting: false,
+      });
+      if (!saved || !restoreBackup) return;
+
+      try {
+        const result = await settingsApi.restoreCodexUnifiedHistory();
+        if (result.skippedReason) {
+          toast.info(
+            result.skippedReason === "unify_toggle_on"
+              ? t("settings.unifyCodexHistoryRestoreSkippedToggleOn")
+              : t("settings.unifyCodexHistoryRestoreNothing"),
+          );
+          return;
+        }
+        toast.success(
+          t("settings.unifyCodexHistoryRestoreCompleted", {
+            files: result.restoredJsonlFiles,
+            rows: result.restoredStateRows,
+          }),
+        );
+      } catch (error) {
+        console.error("Failed to restore codex unified history:", error);
+        toast.error(t("settings.unifyCodexHistoryRestoreFailed"));
+      }
+    },
+    [saveUnifyCodexHistory, t],
+  );
+
   const codexQuickSetup =
     appId === "codex" ? (
       <CodexIxQuickSetup
@@ -463,6 +613,121 @@ export function ProviderList({
 
   return (
     <div className="mt-4 space-y-4">
+      {appId === "codex" && (
+        <div className="flex items-center justify-end gap-2">
+          <TooltipProvider delayDuration={300}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  variant={unifyCodexSessionHistory ? "secondary" : "outline"}
+                  size="sm"
+                  className={cn(
+                    "h-8 gap-1.5 text-xs",
+                    unifyCodexSessionHistory &&
+                      "border-sky-500/30 bg-sky-500/10 text-sky-700 hover:bg-sky-500/15 dark:text-sky-300",
+                  )}
+                  onClick={handleUnifySessionClick}
+                  disabled={!settings || isSavingUnifyHistory}
+                  title={t("provider.unifySessionTooltip", {
+                    defaultValue:
+                      "Use one Codex session history for official and third-party providers",
+                  })}
+                  aria-label={t("provider.unifySessionTooltip", {
+                    defaultValue:
+                      "Use one Codex session history for official and third-party providers",
+                  })}
+                >
+                  {isSavingUnifyHistory ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <History className="h-3.5 w-3.5" />
+                  )}
+                  {unifyCodexSessionHistory
+                    ? t("provider.unifySessionOn", {
+                        defaultValue: "Unified Sessions On",
+                      })
+                    : t("provider.unifySession", {
+                        defaultValue: "Unify Sessions",
+                      })}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {t("provider.unifySessionTooltip", {
+                  defaultValue:
+                    "Use one Codex session history for official and third-party providers",
+                })}
+              </TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 gap-1.5 text-xs"
+                  onClick={handleRestartApp}
+                  disabled={isRestartingApp}
+                  title={t("provider.restartAppTooltip", {
+                    defaultValue:
+                      "Restart the Codex App through Tauri relaunch",
+                  })}
+                  aria-label={t("provider.restartAppTooltip", {
+                    defaultValue:
+                      "Restart the Codex App through Tauri relaunch",
+                  })}
+                >
+                  {isRestartingApp ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RotateCcw className="h-3.5 w-3.5" />
+                  )}
+                  {isRestartingApp
+                    ? t("provider.restartingApp", {
+                        defaultValue: "Restarting",
+                      })
+                    : t("provider.restartApp", {
+                        defaultValue: "Restart Codex App",
+                      })}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {t("provider.restartAppTooltip", {
+                  defaultValue: "Restart the Codex App through Tauri relaunch",
+                })}
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        </div>
+      )}
+
+      <ConfirmDialog
+        isOpen={showUnifyEnableConfirm}
+        title={t("confirm.unifyCodexHistory.title")}
+        message={t("confirm.unifyCodexHistory.message")}
+        checkboxLabel={t("confirm.unifyCodexHistory.migrateExisting")}
+        confirmText={t("confirm.unifyCodexHistory.confirm")}
+        onConfirm={handleUnifyEnableConfirm}
+        onCancel={() => setShowUnifyEnableConfirm(false)}
+      />
+
+      <ConfirmDialog
+        isOpen={showUnifyDisableConfirm}
+        title={t("confirm.unifyCodexHistoryOff.title")}
+        message={t("confirm.unifyCodexHistoryOff.message")}
+        checkboxLabel={
+          showRestoreUnifyOption
+            ? t("confirm.unifyCodexHistoryOff.restoreBackup")
+            : undefined
+        }
+        checkboxDefaultChecked
+        confirmText={t("confirm.unifyCodexHistoryOff.confirm")}
+        onConfirm={(restoreBackup) =>
+          void handleUnifyDisableConfirm(restoreBackup)
+        }
+        onCancel={() => setShowUnifyDisableConfirm(false)}
+      />
+
       {claudeDesktopStatusMessages.length > 0 && (
         <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-900 dark:text-amber-200">
           <div className="flex items-center gap-2 font-medium">

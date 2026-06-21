@@ -218,6 +218,7 @@ export function ProviderCard({
     appId === "hermes" && isHermesReadOnlyProvider(provider.settingsConfig);
   const isCodexOauth =
     provider.meta?.providerType === PROVIDER_TYPES.CODEX_OAUTH;
+  const isIxGogoai = provider.meta?.providerType === "ix_gogoai";
   const codexNeedsRouting = useMemo(() => {
     if (appId !== "codex" || provider.category === "official") return false;
     if (provider.meta?.apiFormat === "openai_chat") return true;
@@ -249,16 +250,21 @@ export function ProviderCard({
 
   const isTokenPlan =
     provider.meta?.usage_script?.templateType === "token_plan";
+  const hasIxUsage = Boolean(isIxGogoai && usage?.success && usage.data?.length);
   const hasMultiplePlans =
-    usage?.success && usage.data && usage.data.length > 1 && !isTokenPlan;
+    usage?.success &&
+    usage.data &&
+    usage.data.length > 1 &&
+    !isTokenPlan &&
+    !isIxGogoai;
 
   const [isExpanded, setIsExpanded] = useState(false);
 
   useEffect(() => {
-    if (hasMultiplePlans) {
+    if (hasMultiplePlans || hasIxUsage) {
       setIsExpanded(true);
     }
-  }, [hasMultiplePlans]);
+  }, [hasMultiplePlans, hasIxUsage]);
 
   const handleOpenWebsite = () => {
     if (!isClickableUrl) {
@@ -500,7 +506,7 @@ export function ProviderCard({
                     })}
                   </span>
                 </div>
-              ) : (
+              ) : isIxGogoai && usage?.success ? null : (
                 <UsageFooter
                   provider={provider}
                   providerId={provider.id}
@@ -585,7 +591,7 @@ export function ProviderCard({
         </div>
       </div>
 
-      {isExpanded && hasMultiplePlans && (
+      {isExpanded && (hasMultiplePlans || hasIxUsage) && (
         <div className="mt-4 pt-4 border-t border-border-default">
           <UsageFooter
             provider={provider}

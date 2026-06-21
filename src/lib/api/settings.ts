@@ -53,6 +53,14 @@ export const settingsApi = {
     return await invoke("restart_app");
   },
 
+  async restartCodexApp(): Promise<{
+    wasRunning: boolean;
+    launched: boolean;
+    appPath?: string;
+  }> {
+    return await invoke("restart_codex_app");
+  },
+
   async installUpdateAndRestart(): Promise<boolean> {
     return await invoke("install_update_and_restart");
   },

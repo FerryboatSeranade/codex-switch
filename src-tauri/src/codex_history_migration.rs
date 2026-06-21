@@ -44,6 +44,10 @@ fn lock_codex_official_history_op() -> std::sync::MutexGuard<'static, ()> {
 /// Codex 内建默认 provider id：config.toml 没有 `model_provider` 键时会话归入此桶。
 /// 官方订阅（ChatGPT OAuth / OpenAI API key）的历史会话都记录这个 id。
 const OFFICIAL_OPENAI_CODEX_MODEL_PROVIDER_ID: &str = "openai";
+/// Recent Codex app builds write the official bucket as the display-cased id.
+/// Keep both spellings trusted so enabling unified history catches old and new
+/// official sessions.
+const OFFICIAL_OPENAI_CODEX_MODEL_PROVIDER_IDS: &[&str] = &["openai", "OpenAI"];
 const LEGACY_CC_SWITCH_CODEX_MODEL_PROVIDER_ID: &str = "ccswitch";
 // If a Codex preset ever used a temporary routing key, keep that old key here
 // so local history can be bucketed under the current custom provider id.
@@ -213,7 +217,20 @@ pub fn maybe_migrate_codex_official_history_to_unified_bucket(
     // marker 绑定迁移时的 Codex 目录：切换 codex_config_dir 后旧 marker 不再
     // 挡住新目录的迁移（迁移幂等，重跑无害）。
     let codex_dir_key = canonical_dir_string(&codex_dir);
-    if crate::settings::is_codex_official_history_unify_migrated_for_dir(&codex_dir_key) {
+    let source_provider_ids = official_codex_model_provider_ids();
+    if let Some(migration) =
+        crate::settings::codex_official_history_unify_migration_for_dir(&codex_dir_key)
+    {
+        let known_sources: BTreeSet<String> = migration.source_provider_ids.into_iter().collect();
+        if official_history_unify_sources_covered(&known_sources, &source_provider_ids)
+            && !codex_history_contains_model_provider_ids(&codex_dir, &source_provider_ids)?
+        {
+            return Ok(CodexHistoryProviderBucketMigrationOutcome {
+                skipped_reason: Some("already_migrated".to_string()),
+                ..Default::default()
+            });
+        }
+    } else if crate::settings::is_codex_official_history_unify_migrated_for_dir(&codex_dir_key) {
         return Ok(CodexHistoryProviderBucketMigrationOutcome {
             skipped_reason: Some("already_migrated".to_string()),
             ..Default::default()
@@ -232,8 +249,6 @@ pub fn maybe_migrate_codex_official_history_to_unified_bucket(
         });
     }
 
-    let source_provider_ids: BTreeSet<String> =
-        std::iter::once(OFFICIAL_OPENAI_CODEX_MODEL_PROVIDER_ID.to_string()).collect();
     let backup_root = migration_backup_root(OFFICIAL_UNIFY_MIGRATION_NAME);
     let migrated_jsonl_files =
         migrate_codex_jsonl_files(&codex_dir, &source_provider_ids, &backup_root)?;
@@ -242,8 +257,9 @@ pub fn maybe_migrate_codex_official_history_to_unified_bucket(
     // 备份代际记录来源目录，restore 据此只取当前目录的账本。
     write_backup_generation_meta(&backup_root, &codex_dir_key)?;
 
+    let source_provider_ids_vec: Vec<String> = source_provider_ids.iter().cloned().collect();
     let outcome = CodexHistoryProviderBucketMigrationOutcome {
-        source_provider_ids: source_provider_ids.into_iter().collect(),
+        source_provider_ids: source_provider_ids_vec.clone(),
         migrated_jsonl_files,
         migrated_state_rows,
         skipped_reason: None,
@@ -256,6 +272,7 @@ pub fn maybe_migrate_codex_official_history_to_unified_bucket(
         CodexOfficialHistoryUnifyMigration {
             completed_at: Utc::now().to_rfc3339(),
             target_provider_id: CC_SWITCH_CODEX_MODEL_PROVIDER_ID.to_string(),
+            source_provider_ids: source_provider_ids_vec.clone(),
             migrated_jsonl_files,
             migrated_state_rows,
             codex_config_dir: Some(codex_dir_key),
@@ -269,6 +286,117 @@ pub fn maybe_migrate_codex_official_history_to_unified_bucket(
     }
 
     Ok(outcome)
+}
+
+fn official_codex_model_provider_ids() -> BTreeSet<String> {
+    OFFICIAL_OPENAI_CODEX_MODEL_PROVIDER_IDS
+        .iter()
+        .map(|provider_id| (*provider_id).to_string())
+        .collect()
+}
+
+fn is_official_codex_model_provider_id(provider_id: &str) -> bool {
+    OFFICIAL_OPENAI_CODEX_MODEL_PROVIDER_IDS
+        .iter()
+        .any(|official_id| *official_id == provider_id)
+}
+
+fn official_history_unify_sources_covered(
+    known_sources: &BTreeSet<String>,
+    expected_sources: &BTreeSet<String>,
+) -> bool {
+    expected_sources
+        .iter()
+        .all(|source| known_sources.iter().any(|known| known == source))
+}
+
+fn codex_history_contains_model_provider_ids(
+    codex_dir: &Path,
+    source_provider_ids: &BTreeSet<String>,
+) -> Result<bool, AppError> {
+    if source_provider_ids.is_empty() {
+        return Ok(false);
+    }
+
+    let source_provider_ids: HashSet<String> = source_provider_ids.iter().cloned().collect();
+
+    let mut files = Vec::new();
+    collect_jsonl_files(&codex_dir.join("sessions"), &mut files, 0, 8);
+    collect_jsonl_files(&codex_dir.join("archived_sessions"), &mut files, 0, 4);
+    for file_path in files {
+        if codex_jsonl_contains_model_provider_ids(&file_path, &source_provider_ids)? {
+            return Ok(true);
+        }
+    }
+
+    let config_text = read_codex_config_text().unwrap_or_default();
+    for db_path in codex_state_db_paths(codex_dir, &config_text) {
+        if codex_state_db_contains_model_provider_ids(&db_path, source_provider_ids.iter())? {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
+fn codex_jsonl_contains_model_provider_ids(
+    path: &Path,
+    source_provider_ids: &HashSet<String>,
+) -> Result<bool, AppError> {
+    let content = fs::read_to_string(path).map_err(|e| AppError::io(path, e))?;
+    for line in content.lines() {
+        if !line.contains("\"session_meta\"") || !line.contains("\"model_provider\"") {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if value.get("type").and_then(Value::as_str) != Some("session_meta") {
+            continue;
+        }
+        let Some(provider_id) = value
+            .get("payload")
+            .and_then(|payload| payload.get("model_provider"))
+            .and_then(Value::as_str)
+        else {
+            continue;
+        };
+        if source_provider_ids.contains(provider_id) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn codex_state_db_contains_model_provider_ids<'a>(
+    db_path: &Path,
+    source_provider_ids: impl Iterator<Item = &'a String>,
+) -> Result<bool, AppError> {
+    if !db_path.exists() {
+        return Ok(false);
+    }
+    let source_provider_ids: Vec<&String> = source_provider_ids.collect();
+    if source_provider_ids.is_empty() {
+        return Ok(false);
+    }
+
+    let conn = Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|e| AppError::Database(format!("打开 Codex state DB 失败: {e}")))?;
+    if !Database::table_exists(&conn, "threads")?
+        || !Database::has_column(&conn, "threads", "model_provider")?
+    {
+        return Ok(false);
+    }
+
+    let placeholders = placeholders(source_provider_ids.len());
+    let count_sql =
+        format!("SELECT COUNT(*) FROM threads WHERE model_provider IN ({placeholders})");
+    let matching_rows: i64 = conn
+        .query_row(&count_sql, params_from_iter(source_provider_ids), |row| {
+            row.get(0)
+        })
+        .map_err(|e| AppError::Database(format!("统计 Codex state DB 官方历史行失败: {e}")))?;
+    Ok(matching_rows > 0)
 }
 
 /// live config.toml 是否路由到共享 custom 桶（会话分桶只看这个实态：
@@ -499,9 +627,10 @@ fn collect_official_session_ids_from_backup(path: &Path, session_ids: &mut HashS
         let Some(payload) = value.get("payload") else {
             continue;
         };
-        if payload.get("model_provider").and_then(Value::as_str)
-            != Some(OFFICIAL_OPENAI_CODEX_MODEL_PROVIDER_ID)
-        {
+        let Some(model_provider) = payload.get("model_provider").and_then(Value::as_str) else {
+            continue;
+        };
+        if !is_official_codex_model_provider_id(model_provider) {
             continue;
         }
         if let Some(session_id) = payload.get("id").and_then(Value::as_str) {
@@ -527,10 +656,13 @@ fn collect_official_thread_ids_from_backup(db_path: &Path, thread_ids: &mut BTre
     if !has_threads {
         return;
     }
-    let Ok(mut stmt) = conn.prepare("SELECT id FROM threads WHERE model_provider = ?1") else {
+    let source_provider_ids = official_codex_model_provider_ids();
+    let placeholders = placeholders(source_provider_ids.len());
+    let sql = format!("SELECT id FROM threads WHERE model_provider IN ({placeholders})");
+    let Ok(mut stmt) = conn.prepare(&sql) else {
         return;
     };
-    let Ok(rows) = stmt.query_map([OFFICIAL_OPENAI_CODEX_MODEL_PROVIDER_ID], |row| {
+    let Ok(rows) = stmt.query_map(params_from_iter(source_provider_ids.iter()), |row| {
         row.get::<_, String>(0)
     }) else {
         return;
@@ -1672,7 +1804,7 @@ base_url = "https://proxy.example/v1"
         let backup_root = dir.path().join("backup");
         fs::create_dir_all(&codex_dir).expect("create codex dir");
 
-        let source_provider_ids = source_ids(&[OFFICIAL_OPENAI_CODEX_MODEL_PROVIDER_ID]);
+        let source_provider_ids = official_codex_model_provider_ids();
 
         let session_dir = codex_dir.join("sessions/2026/06/12");
         fs::create_dir_all(&session_dir).expect("create session dir");
@@ -1681,8 +1813,9 @@ base_url = "https://proxy.example/v1"
             &session_path,
             concat!(
                 "{\"type\":\"session_meta\",\"payload\":{\"id\":\"s1\",\"model_provider\":\"openai\"}}\n",
-                "{\"type\":\"session_meta\",\"payload\":{\"id\":\"s2\",\"model_provider\":\"custom\"}}\n",
-                "{\"type\":\"session_meta\",\"payload\":{\"id\":\"s3\",\"model_provider\":\"my-private-relay\"}}\n",
+                "{\"type\":\"session_meta\",\"payload\":{\"id\":\"s2\",\"model_provider\":\"OpenAI\"}}\n",
+                "{\"type\":\"session_meta\",\"payload\":{\"id\":\"s3\",\"model_provider\":\"custom\"}}\n",
+                "{\"type\":\"session_meta\",\"payload\":{\"id\":\"s4\",\"model_provider\":\"my-private-relay\"}}\n",
                 "{\"type\":\"response_item\",\"payload\":{\"text\":\"openai\"}}\n",
             ),
         )
@@ -1697,9 +1830,10 @@ base_url = "https://proxy.example/v1"
             session_text
                 .matches("\"model_provider\":\"custom\"")
                 .count(),
-            2
+            3
         );
         assert!(!session_text.contains("\"model_provider\":\"openai\""));
+        assert!(!session_text.contains("\"model_provider\":\"OpenAI\""));
         assert!(session_text.contains("\"model_provider\":\"my-private-relay\""));
         assert!(
             session_text.contains("{\"type\":\"response_item\",\"payload\":{\"text\":\"openai\"}}")
@@ -1722,6 +1856,7 @@ base_url = "https://proxy.example/v1"
             );
             INSERT INTO threads (id, model_provider) VALUES
                 ('openai-thread', 'openai'),
+                ('display-openai-thread', 'OpenAI'),
                 ('custom-thread', 'custom'),
                 ('manual-thread', 'my-private-relay');",
         )
@@ -1735,7 +1870,7 @@ base_url = "https://proxy.example/v1"
             &backup_root,
         )
         .expect("migrate state db");
-        assert_eq!(migrated_state_rows, 1);
+        assert_eq!(migrated_state_rows, 2);
 
         let conn = Connection::open(&state_db_path).expect("reopen state db");
         let count_provider = |provider_id: &str| -> i64 {
@@ -1746,8 +1881,9 @@ base_url = "https://proxy.example/v1"
             )
             .expect("count provider")
         };
-        assert_eq!(count_provider("custom"), 2);
+        assert_eq!(count_provider("custom"), 3);
         assert_eq!(count_provider("openai"), 0);
+        assert_eq!(count_provider("OpenAI"), 0);
         assert_eq!(count_provider("my-private-relay"), 1);
     }
 
@@ -1758,13 +1894,17 @@ base_url = "https://proxy.example/v1"
         let ledger_parent = dir.path().join("ledger");
         let restore_backup_root = dir.path().join("restore-backup");
 
-        // 备份账本：一个代际，jsonl 备份里 s1 是 openai；state 备份里 t1 是 openai
+        // 备份账本：一个代际，jsonl 备份里 s1/s4 是官方桶；state 备份里
+        // t1/t4 是官方桶。Codex app 历史里官方桶可能写成 openai 或 OpenAI。
         let generation = ledger_parent.join("20260612_010101");
         let backup_session_dir = generation.join("jsonl/sessions/2026/06/01");
         fs::create_dir_all(&backup_session_dir).expect("create backup session dir");
         fs::write(
             backup_session_dir.join("official.jsonl"),
-            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"s1\",\"model_provider\":\"openai\"}}\n",
+            concat!(
+                "{\"type\":\"session_meta\",\"payload\":{\"id\":\"s1\",\"model_provider\":\"openai\"}}\n",
+                "{\"type\":\"session_meta\",\"payload\":{\"id\":\"s4\",\"model_provider\":\"OpenAI\"}}\n",
+            ),
         )
         .expect("write backup session");
         let backup_state_dir = generation.join("state");
@@ -1774,19 +1914,24 @@ base_url = "https://proxy.example/v1"
         backup_db
             .execute_batch(
                 "CREATE TABLE threads (id TEXT PRIMARY KEY, model_provider TEXT NOT NULL);
-                INSERT INTO threads (id, model_provider) VALUES ('t1', 'openai');",
+                INSERT INTO threads (id, model_provider) VALUES
+                    ('t1', 'openai'),
+                    ('t4', 'OpenAI');",
             )
             .expect("seed backup db");
         drop(backup_db);
 
-        // 当前数据：s1（账本内，custom）应还原；s2（开启期间新会话，不在账本）
-        // 与 s3（手工 relay）必须原样保留
+        // 当前数据：s1/s4（账本内，custom）应还原；s2（开启期间新会话，
+        // 不在账本）与 s3（手工 relay）必须原样保留
         let session_dir = codex_dir.join("sessions/2026/06/01");
         fs::create_dir_all(&session_dir).expect("create session dir");
         let official_path = session_dir.join("official.jsonl");
         fs::write(
             &official_path,
-            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"s1\",\"model_provider\":\"custom\"}}\n",
+            concat!(
+                "{\"type\":\"session_meta\",\"payload\":{\"id\":\"s1\",\"model_provider\":\"custom\"}}\n",
+                "{\"type\":\"session_meta\",\"payload\":{\"id\":\"s4\",\"model_provider\":\"custom\"}}\n",
+            ),
         )
         .expect("write official session");
         let on_period_dir = codex_dir.join("sessions/2026/06/12");
@@ -1808,7 +1953,8 @@ base_url = "https://proxy.example/v1"
             INSERT INTO threads (id, model_provider) VALUES
                 ('t1', 'custom'),
                 ('t2', 'custom'),
-                ('t3', 'openai');",
+                ('t3', 'openai'),
+                ('t4', 'custom');",
         )
         .expect("seed state db");
         drop(conn);
@@ -1831,7 +1977,7 @@ base_url = "https://proxy.example/v1"
         )
         .expect("restore");
         assert_eq!(outcome.restored_jsonl_files, 1);
-        assert_eq!(outcome.restored_state_rows, 1);
+        assert_eq!(outcome.restored_state_rows, 2);
         assert!(outcome.skipped_reason.is_none());
 
         let official_text = fs::read_to_string(&official_path).expect("read official");
@@ -1852,6 +1998,7 @@ base_url = "https://proxy.example/v1"
         assert_eq!(provider_of("t1"), "openai");
         assert_eq!(provider_of("t2"), "custom");
         assert_eq!(provider_of("t3"), "openai");
+        assert_eq!(provider_of("t4"), "openai");
         drop(conn);
 
         // 还原前的现场已备份到独立目录

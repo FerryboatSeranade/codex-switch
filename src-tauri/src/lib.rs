@@ -1191,6 +1191,7 @@ pub fn run() {
             commands::get_log_config,
             commands::set_log_config,
             commands::restart_app,
+            commands::restart_codex_app,
             commands::install_update_and_restart,
             commands::check_for_updates,
             commands::is_portable_mode,

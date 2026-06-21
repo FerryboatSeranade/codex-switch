@@ -1,0 +1,69 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Codex Switch",
+  "version": "3.16.5",
+  "identifier": "com.cccswitch.desktop",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:3000",
+    "beforeDevCommand": "corepack pnpm@9.15.9 run dev:renderer",
+    "beforeBuildCommand": "corepack pnpm@9.15.9 run build:renderer"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "",
+        "titleBarStyle": "Overlay",
+        "width": 1000,
+        "height": 650,
+        "minWidth": 900,
+        "minHeight": 600,
+        "visible": false,
+        "resizable": true,
+        "fullscreen": false,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' data: https: http:; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost https: http:",
+      "assetProtocol": {
+        "enable": true,
+        "scope": []
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "createUpdaterArtifacts": true,
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "wix": {
+        "template": "wix/per-user-main.wxs"
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "12.0"
+    }
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["cccswitch"]
+      }
+    },
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEM0NjdGNURBMkQxQzg4NDkKUldSSmlCd3QydlZueFBNbng2TVJzZ3lESjBMTEhTMEVvZGVZZ0RSTHdSNC81V3BkNThZb01oUloK",
+      "endpoints": [
+        "https://github.com/FerryboatSeranade/codex-switch/releases/latest/download/latest.json"
+      ]
+    }
+  }
+}

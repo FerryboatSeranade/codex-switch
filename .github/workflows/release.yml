@@ -224,8 +224,18 @@ jobs:
           # Cleanup certificate file
           rm -f "$CERT_PATH"
 
-      - name: Build Tauri App (macOS)
-        if: runner.os == 'macOS'
+      - name: Build Tauri App (macOS unsigned)
+        if: runner.os == 'macOS' && steps.apple-signing.outputs.available != 'true'
+        shell: bash
+        timeout-minutes: 60
+        run: |
+          set -euo pipefail
+          echo "Apple signing secrets are not configured; building unsigned macOS artifacts."
+          unset APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID
+          pnpm tauri build --target universal-apple-darwin
+
+      - name: Build Tauri App (macOS signed)
+        if: runner.os == 'macOS' && steps.apple-signing.outputs.available == 'true'
         shell: bash
         timeout-minutes: 60
         env:
@@ -235,11 +245,6 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
-          if [ "${APPLE_SIGNING_AVAILABLE:-false}" != "true" ]; then
-            echo "Apple signing secrets are not configured; building unsigned macOS artifacts."
-            pnpm tauri build --target universal-apple-darwin
-            exit 0
-          fi
 
           max_attempts=3
           for attempt in $(seq 1 "$max_attempts"); do

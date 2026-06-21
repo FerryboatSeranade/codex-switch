@@ -191,7 +191,7 @@ pub struct CodexAppRestartResult {
     pub app_path: Option<String>,
 }
 
-/// 重启外部 Codex.app，而不是重启 CCC Switch 自身。
+/// 重启外部 Codex.app，而不是重启 Codex Switch 自身。
 #[tauri::command]
 pub async fn restart_codex_app() -> Result<CodexAppRestartResult, String> {
     restart_codex_app_impl().await

@@ -1168,7 +1168,7 @@ function App() {
                         : "text-blue-500 dark:text-blue-400",
                     )}
                   >
-                    CCC Switch
+                    Codex Switch
                   </span>
                 </div>
                 <Button
@@ -1185,7 +1185,7 @@ function App() {
                 </Button>
                 <UpdateBadge
                   onClick={() => {
-                    setSettingsDefaultTab("about");
+                    setSettingsDefaultTab("general");
                     setCurrentView("settings");
                   }}
                 />

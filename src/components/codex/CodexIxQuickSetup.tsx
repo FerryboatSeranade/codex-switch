@@ -1,8 +1,16 @@
 import { useCallback, useEffect, useState } from "react";
-import { KeyRound, Loader2 } from "lucide-react";
+import { KeyRound, Loader2, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { codexGogoaisApi } from "@/lib/api/codexGogoais";
 import { providersApi } from "@/lib/api/providers";
 import { createUsageScript, type Provider } from "@/types";
@@ -226,6 +234,14 @@ wire_api = "responses"
 requires_openai_auth = true`;
 }
 
+function codexOpenaiBaseUrl(raw: string): string {
+  const base = raw.trim().replace(/\/+$/, "");
+  if (/\/v\d+$/i.test(base)) {
+    return base;
+  }
+  return `${base}/v1`;
+}
+
 function createIxProvider(
   apiKey: string,
   baseUrl: string,
@@ -284,7 +300,9 @@ export function CodexIxQuickSetup({
 }: CodexIxQuickSetupProps) {
   const [account, setAccount] = useState("");
   const [password, setPassword] = useState("");
+  const [relayApiKey, setRelayApiKey] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [isApplyingRelayKey, setIsApplyingRelayKey] = useState(false);
   const [isSyncingUsageScript, setIsSyncingUsageScript] = useState(false);
 
   useEffect(() => {
@@ -368,50 +386,165 @@ export function CodexIxQuickSetup({
     }
   }, [account, password, providers, onConfigured]);
 
+  const handleApplyRelayKey = useCallback(async () => {
+    const normalizedApiKey = relayApiKey.trim();
+    if (!normalizedApiKey) {
+      toast.error("请输入中转 API Key");
+      return;
+    }
+
+    setIsApplyingRelayKey(true);
+    try {
+      const existingProvider = providers[IX_PROVIDER_ID];
+      const provider = createIxProvider(
+        normalizedApiKey,
+        codexOpenaiBaseUrl(IX_CODE_BASE_URL),
+        existingProvider,
+      );
+      const exists = Boolean(existingProvider);
+
+      if (exists) {
+        await providersApi.update(provider, "codex", IX_PROVIDER_ID);
+      } else {
+        await providersApi.add(provider, "codex");
+      }
+      await providersApi.switch(IX_PROVIDER_ID, "codex");
+
+      setRelayApiKey("");
+      toast.success("中转 API Key 已写入 default 环境并生效");
+      onConfigured?.();
+    } catch (err) {
+      console.warn("[IX] Codex relay API key setup failed:", err);
+      toast.error(
+        typeof err === "string"
+          ? err
+          : err instanceof Error
+            ? err.message
+            : "中转 API Key 配置失败，请检查后重试",
+      );
+    } finally {
+      setIsApplyingRelayKey(false);
+    }
+  }, [relayApiKey, providers, onConfigured]);
+
   return (
-    <div className="mt-5 space-y-2 px-6">
+    <div className="mt-5 space-y-3 px-6">
       <div className="flex items-center gap-2 text-sm font-medium text-foreground">
         <KeyRound className="h-4 w-4 text-muted-foreground" />
-        请输入 ix 账号密码
+        IX Codex 快速配置
       </div>
-      <div className="grid grid-cols-1 gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
-        <Input
-          value={account}
-          onChange={(event) => setAccount(event.target.value)}
-          placeholder="ix 账号"
-          autoComplete="username"
-        />
-        <Input
-          type="password"
-          value={password}
-          onChange={(event) => setPassword(event.target.value)}
-          placeholder="密码"
-          autoComplete="current-password"
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              void handleSetup();
-            }
-          }}
-        />
-        <Button
-          type="button"
-          onClick={() => void handleSetup()}
-          disabled={isLoading}
-        title="获取 API Key，自动配置 default 环境并启用用量查询"
-          className="gap-1.5 whitespace-nowrap"
-        >
-          {isLoading ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <KeyRound className="h-4 w-4" />
-          )}
-          直接获取
-        </Button>
-      </div>
-      <p className="text-xs text-muted-foreground">
-        获取后自动配置 default 环境、切换到 https://code.gogoais.com/v1，并自动启用用量查询；密码不会保存。
-      </p>
+      <Tabs defaultValue="account" className="space-y-3">
+        <TabsList className="grid w-full max-w-md grid-cols-2">
+          <TabsTrigger value="account">账号密码</TabsTrigger>
+          <TabsTrigger value="apiKey">中转 API Key</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="account" className="mt-0 space-y-2">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] md:items-end">
+            <div className="space-y-1.5">
+              <Label htmlFor="ix-account">IX 账号</Label>
+              <Input
+                id="ix-account"
+                value={account}
+                onChange={(event) => setAccount(event.target.value)}
+                placeholder="请输入账号"
+                autoComplete="username"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="ix-password">密码</Label>
+              <Input
+                id="ix-password"
+                type="password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                placeholder="请输入密码"
+                autoComplete="current-password"
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    void handleSetup();
+                  }
+                }}
+              />
+            </div>
+            <TooltipProvider delayDuration={300}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    onClick={() => void handleSetup()}
+                    disabled={isLoading}
+                    aria-label="获取 API Key 并配置 IX Codex"
+                    className="gap-1.5 whitespace-nowrap"
+                  >
+                    {isLoading ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <KeyRound className="h-4 w-4" />
+                    )}
+                    直接获取
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  获取 Key 并切换 default 环境
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            获取后自动配置 default 环境、切换到 https://code.gogoais.com/v1，并自动启用用量查询；密码不会保存。
+          </p>
+        </TabsContent>
+
+        <TabsContent value="apiKey" className="mt-0 space-y-2">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+            <div className="space-y-1.5">
+              <Label htmlFor="ix-relay-api-key">中转 API Key</Label>
+              <Input
+                id="ix-relay-api-key"
+                type="password"
+                value={relayApiKey}
+                onChange={(event) => setRelayApiKey(event.target.value)}
+                placeholder="sk-..."
+                autoComplete="off"
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    void handleApplyRelayKey();
+                  }
+                }}
+              />
+            </div>
+            <TooltipProvider delayDuration={300}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    onClick={() => void handleApplyRelayKey()}
+                    disabled={isApplyingRelayKey}
+                    aria-label="写入中转 API Key 并立即生效"
+                    className="gap-1.5 whitespace-nowrap"
+                  >
+                    {isApplyingRelayKey ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <ShieldCheck className="h-4 w-4" />
+                    )}
+                    直接生效
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  写入 Key 并切换 default 环境
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            使用同一个中转地址 https://code.gogoais.com/v1；保存后会立即切换到 default 环境。
+          </p>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

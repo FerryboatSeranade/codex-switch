@@ -2,7 +2,7 @@ use crate::error::AppError;
 use auto_launch::{AutoLaunch, AutoLaunchBuilder};
 
 /// 获取 macOS 上的 .app bundle 路径
-/// 将 `/path/to/CCC Switch.app/Contents/MacOS/CCC Switch` 转换为 `/path/to/CCC Switch.app`
+/// 将 `/path/to/Codex Switch.app/Contents/MacOS/Codex Switch` 转换为 `/path/to/Codex Switch.app`
 #[cfg(target_os = "macos")]
 fn get_macos_app_bundle_path(exe_path: &std::path::Path) -> Option<std::path::PathBuf> {
     let path_str = exe_path.to_string_lossy();
@@ -17,7 +17,7 @@ fn get_macos_app_bundle_path(exe_path: &std::path::Path) -> Option<std::path::Pa
 
 /// 初始化 AutoLaunch 实例
 fn get_auto_launch() -> Result<AutoLaunch, AppError> {
-    let app_name = "CCC Switch";
+    let app_name = "Codex Switch";
     let exe_path =
         std::env::current_exe().map_err(|e| AppError::Message(format!("无法获取应用路径: {e}")))?;
 
@@ -77,11 +77,11 @@ mod tests {
     #[test]
     fn test_get_macos_app_bundle_path_valid() {
         let exe_path =
-            std::path::Path::new("/Applications/CCC Switch.app/Contents/MacOS/CCC Switch");
+            std::path::Path::new("/Applications/Codex Switch.app/Contents/MacOS/Codex Switch");
         let result = get_macos_app_bundle_path(exe_path);
         assert_eq!(
             result,
-            Some(std::path::PathBuf::from("/Applications/CCC Switch.app"))
+            Some(std::path::PathBuf::from("/Applications/Codex Switch.app"))
         );
     }
 
@@ -89,12 +89,12 @@ mod tests {
     #[test]
     fn test_get_macos_app_bundle_path_with_spaces() {
         let exe_path =
-            std::path::Path::new("/Users/test/My Apps/CCC Switch.app/Contents/MacOS/CCC Switch");
+            std::path::Path::new("/Users/test/My Apps/Codex Switch.app/Contents/MacOS/Codex Switch");
         let result = get_macos_app_bundle_path(exe_path);
         assert_eq!(
             result,
             Some(std::path::PathBuf::from(
-                "/Users/test/My Apps/CCC Switch.app"
+                "/Users/test/My Apps/Codex Switch.app"
             ))
         );
     }

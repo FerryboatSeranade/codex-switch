@@ -53,7 +53,7 @@ pub async fn copy_text_to_clipboard(text: String) -> Result<bool, String> {
 /// 检查更新
 #[tauri::command]
 pub async fn check_for_updates(handle: AppHandle) -> Result<bool, String> {
-    const LATEST_RELEASE_URL: &str = "https://github.com/FerryboatSeranade/ccc-switch/releases/latest";
+    const LATEST_RELEASE_URL: &str = "https://github.com/FerryboatSeranade/codex-switch/releases/latest";
 
     handle
         .opener()

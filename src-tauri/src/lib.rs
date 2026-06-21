@@ -508,7 +508,7 @@ pub fn run() {
             // 预设官方供应商不再在启动时自动创建，保持新安装的主列表清爽；
             // 需要官方项的流程仍可通过 ensure_official_seed_by_id 按需补齐。
             //
-            // 捕获首次运行快照：所有全新装用户都会看到欢迎弹窗介绍 CCC Switch 的工作方式。
+            // 捕获首次运行快照：所有全新装用户都会看到欢迎弹窗介绍 Codex Switch 的工作方式。
             // 读失败时默认不弹，宁可漏弹也不要因为故障打扰用户。
             let first_run_already_confirmed = crate::settings::get_settings()
                 .first_run_notice_confirmed
@@ -855,7 +855,7 @@ pub fn run() {
 
             // 构建托盘
             let mut tray_builder = TrayIconBuilder::with_id(tray::TRAY_ID)
-                .tooltip("CCC Switch") // 鼠标悬停提示
+                .tooltip("Codex Switch") // 鼠标悬停提示
                 .on_tray_icon_event(|tray, event| match event {
                     // 鼠标悬停/点击到托盘图标时，后台异步刷新用量缓存，
                     // 让用户下一次（或快速打开菜单的那一刻）看到较新的数字。
